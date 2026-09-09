@@ -99,7 +99,7 @@ class Simulator:
         )
     def _check_accel(self, state, control):
         return self._get_accel(state, control) > 12 
-    def run(self, tf=90):
+    def run(self, tf=45):
         """Run the simulator with the given controller for `tf` seconds, storing results inside this Simulator.
 
         Args:
