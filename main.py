@@ -10,9 +10,13 @@ setpoint_distance = 2
 wheelbase = 1.58
 dt = 0.01
 
+
+
 track_spacing = track_length / track_sample_count
 track_centerline_distance = np.arange(0.0, track_length, track_spacing)
 track_centerline_points = centerline(track_centerline_distance)
+
+
 
 lookahead_distance = 2.5
 corner_preview_distance = 8.0
@@ -20,13 +24,25 @@ straight_threshold = np.deg2rad(8.0)
 corner_entry_speed = 3.5
 
 
-#PID settings for steering rate
+#PID constants, kp, ki, kd, for steering rate
 steering_kp = 2.5
 steering_ki = 0.05
 steering_kd = 0.03
 
 steering_previous_error = None
 steering_integral = 0.0
+
+
+#PID constants, kp, ki, kd, for velocity 
+velocity_kp = 1.5
+velocity_ki = 0.1
+velocity_kd = 0.1
+
+# velocity_setpoint = 6
+velocity_previous_error = None
+velocity_integral = 0.0
+
+
 
 def wrap_angle(angle):
     return (angle + np.pi) % (2.0 * np.pi) - np.pi
@@ -60,6 +76,7 @@ def controller(x):
     theta   = x[4]                  # current steering angle
 
     global steering_previous_error, steering_integral
+    global velocity_previous_error, velocity_integral
 
     car_position = np.array([xpos, ypos])
     steering_pv = theta
@@ -70,6 +87,8 @@ def controller(x):
     )
     nearest_index = np.argmin(distances)
 
+
+    #PID for steering rate
     steering_lookahead_steps = max(1 ,round(lookahead_distance / track_spacing))
 
     steering_target_index = (nearest_index+ steering_lookahead_steps)%track_sample_count
@@ -99,6 +118,8 @@ def controller(x):
     theta_dot = np.clip(change_of_theta, -1.0, 1.0)
 
 
+
+
     #Determine if we are in a corner or a straight section of the track
     corner_preview_steps = max(1, round(corner_preview_distance / track_spacing))
 
@@ -120,19 +141,43 @@ def controller(x):
         wrap_angle(second_path_heading - first_path_heading)
     )
 
-    straight_ahead = (
-        upcoming_turn < straight_threshold
-    )
 
-    if straight_ahead:
-        a = 4.0
-    elif v > corner_entry_speed:
-        a = -6.6
-    else:
-        a = 1.0
+    #PID for velocity
+    
+    #setpoint for velocity is based on theta
+
+
+    
+    velocity_pv = v
+    if velocity_previous_error is None:
+        velocity_previous_error = (velocity_setpoint - velocity_pv)
+    (change_of_v, velocity_previous_error, velocity_integral) = pid_controller(
+        setpoint=velocity_setpoint,
+        pv=velocity_pv,
+        kp=velocity_kp,
+        ki=velocity_ki,
+        kd=velocity_kd,
+        previous_error=velocity_previous_error,
+        integral=velocity_integral,
+        dt=dt
+    )
+    change_of_v = np.clip(change_of_v, -10, 4)
+
+    # straight_ahead = (
+    #     upcoming_turn < straight_threshold
+    # )
+
+    # if straight_ahead:
+    #     a = 4.0
+    # elif v > corner_entry_speed:
+    #     a = -6.6
+    # else:
+    #     a = 1.0
+
+    
 
     return np.array([
-        a,
+        change_of_v,
         theta_dot
     ])
 
