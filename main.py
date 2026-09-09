@@ -139,12 +139,11 @@ def controller(x):
 
 
 
-def calculate_lap_time(
+def calculate_result(
     simulator,
     reference_path
 ):
-
-    timestamps, states, _, _, _ = (
+    timestamps, states, controls, crash, slip = (
         simulator.get_results()
     )
 
@@ -161,11 +160,9 @@ def calculate_lap_time(
     )
 
     total_progress = 0
+    lap_time = None
 
-    for time_index in range(
-        1,
-        len(timestamps)
-    ):
+    for time_index in range(1,len(timestamps)):
         car_position = positions[time_index]
 
         distances = np.linalg.norm(
@@ -187,12 +184,18 @@ def calculate_lap_time(
         previous_index = current_index
 
         if abs(total_progress) >= number_of_points:
-            return (
+            lap_time = (
                 timestamps[time_index]
                 - timestamps[0]
             )
+            break
 
-    return None
+    print(f"Lap time: {lap_time:.2f}")
+
+    print("Crash:", np.any(crash))
+    print("Slip:", np.any(slip))
+
+    return lap_time
 
 
 
@@ -200,7 +203,7 @@ sim.set_controller(controller)
 sim.run()
 sim.animate()
 sim.plot()
-lap_time = calculate_lap_time(
+lap_time = calculate_result(
     sim,
     track_centerline_points
 )
