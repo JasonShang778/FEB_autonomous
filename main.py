@@ -25,9 +25,9 @@ corner_entry_speed = 3.5
 
 
 #PID constants, kp, ki, kd, for steering rate
-steering_kp = 2.5
-steering_ki = 0.05
-steering_kd = 0.03
+steering_kp = 3
+steering_ki = 0.01
+steering_kd = 0.1
 
 steering_previous_error = None
 steering_integral = 0.0
@@ -38,10 +38,10 @@ velocity_kp = 1.5
 velocity_ki = 0.1
 velocity_kd = 0.1
 
-# velocity_setpoint = 6
+
 velocity_previous_error = None
 velocity_integral = 0.0
-
+change_of_v=0.0
 
 
 def wrap_angle(angle):
@@ -76,7 +76,7 @@ def controller(x):
     theta   = x[4]                  # current steering angle
 
     global steering_previous_error, steering_integral
-    global velocity_previous_error, velocity_integral
+    global velocity_previous_error, velocity_integral, change_of_v
 
     car_position = np.array([xpos, ypos])
     steering_pv = theta
@@ -118,39 +118,18 @@ def controller(x):
     theta_dot = np.clip(change_of_theta, -1.0, 1.0)
 
 
-
-
-    #Determine if we are in a corner or a straight section of the track
-    corner_preview_steps = max(1, round(corner_preview_distance / track_spacing))
-
-    middle_preview_steps = max(1, round((corner_preview_distance / 2) / track_spacing))
-
-    first_point = track_centerline_points[nearest_index]
-    second_point = track_centerline_points[(nearest_index + middle_preview_steps)%track_sample_count]
-    third_point = track_centerline_points[(nearest_index + corner_preview_steps)%track_sample_count]
-
-    first_path_vector = (second_point - first_point)
-
-    second_path_vector = (third_point - second_point)
-
-    first_path_heading = np.arctan2(first_path_vector[1],first_path_vector[0])
-
-    second_path_heading = np.arctan2(second_path_vector[1],second_path_vector[0])
-
-    upcoming_turn = abs(
-        wrap_angle(second_path_heading - first_path_heading)
-    )
-
-
     #PID for velocity
     
     #setpoint for velocity is based on theta
+    maximum_velocity = 16.0
 
+    if (theta == 0.0):
+        theta = 1e-6
 
-    
     velocity_pv = v
-    if velocity_previous_error is None:
-        velocity_previous_error = (velocity_setpoint - velocity_pv)
+    velocity_setpoint = np.sqrt(0.79 * np.sqrt(10.0**2 - change_of_v**2) / abs(np.sin(np.arctan(0.5 * np.tan(theta)))))
+    velocity_setpoint = np.clip(velocity_setpoint, 0.0, 6.0)
+    velocity_previous_error = (velocity_setpoint - velocity_pv)
     (change_of_v, velocity_previous_error, velocity_integral) = pid_controller(
         setpoint=velocity_setpoint,
         pv=velocity_pv,
@@ -163,17 +142,6 @@ def controller(x):
     )
     change_of_v = np.clip(change_of_v, -10, 4)
 
-    # straight_ahead = (
-    #     upcoming_turn < straight_threshold
-    # )
-
-    # if straight_ahead:
-    #     a = 4.0
-    # elif v > corner_entry_speed:
-    #     a = -6.6
-    # else:
-    #     a = 1.0
-
     
 
     return np.array([
@@ -184,72 +152,9 @@ def controller(x):
 
 
 
-def calculate_result(
-    simulator,
-    reference_path
-):
-    timestamps, states, controls, crash, slip = (
-        simulator.get_results()
-    )
-
-    positions = states[:2].T
-    number_of_points = len(reference_path)
-
-    starting_distances = np.linalg.norm(
-        reference_path - positions[0],
-        axis=1
-    )
-
-    previous_index = np.argmin(
-        starting_distances
-    )
-
-    total_progress = 0
-    lap_time = None
-
-    for time_index in range(1,len(timestamps)):
-        car_position = positions[time_index]
-
-        distances = np.linalg.norm(
-            reference_path - car_position,
-            axis=1
-        )
-
-        current_index = np.argmin(
-            distances
-        )
-
-        index_change = (
-            current_index
-            - previous_index
-            + number_of_points // 2
-        ) % number_of_points - number_of_points // 2
-
-        total_progress += index_change
-        previous_index = current_index
-
-        if abs(total_progress) >= number_of_points:
-            lap_time = (
-                timestamps[time_index]
-                - timestamps[0]
-            )
-            break
-
-    print(f"Lap time: {lap_time:.2f}")
-
-    print("Crash:", np.any(crash))
-    print("Slip:", np.any(slip))
-
-    return lap_time
-
-
 
 sim.set_controller(controller)
 sim.run()
 sim.animate()
 sim.plot()
-lap_time = calculate_result(
-    sim,
-    track_centerline_points
-)
-print(f"Lap time: {lap_time:.2f} seconds")
+
