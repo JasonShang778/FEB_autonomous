@@ -3,43 +3,24 @@ from simulator import Simulator, centerline
 
 sim = Simulator()
 
-def calculate_track_length(points):
-    segments = np.roll(points, -1, axis=0) - points
-    return float(np.sum(np.linalg.norm(segments, axis=1)))
-
 #some basic parameters for the controller
-track_length = calculate_track_length((sim.left_cones + sim.right_cones) / 2.0)
-track_sample_count = 1000
+track_length = 104 
 setpoint_distance = 2
-wheelbase = 1.58
 dt = 0.01
 
-
-track_spacing = track_length / track_sample_count
+track_spacing = track_length / 1000
 track_centerline_points = centerline(np.arange(0.0, track_length, track_spacing))
 
-lookahead_distance = 2.5
-corner_preview_distance = 8.0
-sharp_turn_threshold = np.deg2rad(70.0)
-corner_entry_speed = 3.5
-planned_braking = 6.0
+theta_kp = 3
+theta_ki = 0.01
+theta_kd = 0.1
 
+theta_previous_error = None
+theta_integral = 0.0
 
-#PID constants, kp, ki, kd, for steering rate
-steering_kp = 3
-steering_ki = 0.01
-steering_kd = 0.1
-
-steering_previous_error = None
-steering_integral = 0.0
-
-
-#PID constants, kp, ki, kd, for velocity 
 velocity_kp = 1.5
 velocity_ki = 0.1
 velocity_kd = 0.1
-
-
 velocity_previous_error = None
 velocity_integral = 0.0
 change_of_v=0.0
@@ -76,41 +57,32 @@ def controller(x):
     v      = x[3]                   # current velocity
     theta   = x[4]                  # current steering angle
 
-    global steering_previous_error, steering_integral
-    global velocity_previous_error, velocity_integral, change_of_v
+    global theta_previous_error, theta_integral, velocity_previous_error, velocity_integral, change_of_v
 
     car_position = np.array([xpos, ypos])
-    steering_pv = theta
+    pv = theta
 
-    distances = np.linalg.norm(
-        track_centerline_points - car_position,
-        axis=1
-    )
-    nearest_index = np.argmin(distances)
+    nearest_index = np.argmin(np.linalg.norm(track_centerline_points - car_position, axis=1))
 
 
-    #PID for steering rate
-    steering_lookahead_steps = max(1 ,round(lookahead_distance / track_spacing))
+    #PID theta
 
-    steering_target_index = (nearest_index+ steering_lookahead_steps)%track_sample_count
-    steering_target = track_centerline_points[steering_target_index]
-    target_vector = steering_target - car_position
-    target_heading = np.arctan2(target_vector[1], target_vector[0])
-    heading_error = wrap_angle(target_heading - phi)
-    actual_lookahead_distance = max(1e-6, np.linalg.norm(target_vector))
-    steering_setpoint = np.arctan2(2.0*1.58*np.sin(heading_error), actual_lookahead_distance)
-    steering_setpoint = np.clip(steering_setpoint, -0.7, 0.7)
+    pure_pursuit_point = track_centerline_points(nearest_index+ np.round(2.5 / track_spacing))%1000
+    vector = pure_pursuit_point - car_position
 
 
+    setpoint_angle = wrap_angle(np.arctan2(vector[1], vector[0]) - phi)
+    setpoint = np.clip(setpoint_angle, -0.7, 0.7)
+    
     if steering_previous_error is None:
-        steering_previous_error = (steering_setpoint - steering_pv)
+        steering_previous_error = setpoint - pv
 
     (change_of_theta, steering_previous_error, steering_integral) = pid_controller(
-        setpoint=steering_setpoint,
-        pv=steering_pv,
-        kp=steering_kp,
-        ki=steering_ki,
-        kd=steering_kd,
+        setpoint=setpoint,
+        pv=pv,
+        kp=theta_kp,
+        ki=theta_ki,
+        kd=theta_kd,
         previous_error=steering_previous_error,
         integral=steering_integral,
         dt=dt
@@ -119,39 +91,36 @@ def controller(x):
     theta_dot = np.clip(change_of_theta, -1.0, 1.0)
 
 
-    #PID for velocity
     
-    #setpoint for velocity is based on theta
-    # PID for velocity
-    velocity_pv = v
-    maximum_velocity = 10.0
+    #below is for velocity!!!!
+    # 
+    vpv = v
+    maxv = 10.0
 
-    steering_for_speed = max(abs(theta), abs(steering_setpoint))
-    steering_factor = abs(np.sin(np.arctan(0.5 * np.tan(steering_for_speed))))
+    larger_angle = max(abs(theta), abs(setpoint))
+    lateral_acc_limit_index = abs(np.sin(np.arctan(0.5 * np.tan(larger_angle))))
 
-    
+    vsetpoint = np.clip(np.sqrt(0.79 * 10.0/lateral_acc_limit_index), 0.0, maxv)
 
-    velocity_setpoint = np.sqrt(0.79 * 10.0 / max(steering_factor, 1e-6))
-    velocity_setpoint = np.clip(velocity_setpoint, 0.0, maximum_velocity)
+    threshold_turn = np.deg2rad(70.0)
+    curve_speed = 3.5
+    planned_braking = 6.0
 
-    # Allow room to see the bend as well as to slow down before it.
-    braking_distance = max(0.0, (v**2 - corner_entry_speed**2) / (2.0 * planned_braking))
-    preview_steps = int(np.ceil((corner_preview_distance + braking_distance) / track_spacing))
-    preview_steps = min(track_sample_count - 1, max(2, preview_steps))
-    preview_indices = (nearest_index + np.arange(preview_steps + 1)) % track_sample_count
-    preview_vectors = np.diff(track_centerline_points[preview_indices], axis=0)
-    preview_headings = np.arctan2(preview_vectors[:, 1], preview_vectors[:, 0])
-    turn_ahead = np.max(np.abs(wrap_angle(preview_headings - preview_headings[0])))
+    d_to_slow_down= (v**2 - curve_speed**2) / (2.0 * 6)
+    index_array = nearest_index + np.arange((10 + d_to_slow_down) / track_spacing)
+    delta_vec = np.diff(track_centerline_points[index_array], axis=0)
+    deltaerror = np.arctan2(delta_vec[:, 1], delta_vec[:, 0])
+    max_angle_turn = np.max(np.abs(deltaerror - deltaerror[0]))
 
-    if turn_ahead >= sharp_turn_threshold:
-        velocity_setpoint = min(velocity_setpoint, corner_entry_speed)
+    if max_angle_turn >= threshold_turn:
+        vsetpoint = min(vsetpoint, curve_speed)
 
     if velocity_previous_error is None:
-        velocity_previous_error = velocity_setpoint - velocity_pv
+        velocity_previous_error = vsetpoint - vpv
 
     change_of_v, velocity_previous_error, velocity_integral = pid_controller(
-        setpoint=velocity_setpoint,
-        pv=velocity_pv,
+        setpoint=vsetpoint,
+        pv=vpv,
         kp=velocity_kp,
         ki=velocity_ki,
         kd=velocity_kd,
@@ -161,11 +130,10 @@ def controller(x):
     )
 
     lateral_accel = v**2 * abs(np.sin(np.arctan(0.5 * np.tan(theta)))) / 0.79
-    available_accel = np.sqrt(max(0.0, 11.9**2 - lateral_accel**2))
-    change_of_v = np.clip(change_of_v, -min(10.0, available_accel), min(4.0, available_accel))
+    accel_possible = np.sqrt(max(0.0, 11.9**2 - lateral_accel**2))
+    change_of_v = np.clip(change_of_v, -min(10.0, accel_possible), min(4.0, accel_possible))
 
     
-
     return np.array([
         change_of_v,
         theta_dot
@@ -179,3 +147,4 @@ sim.set_controller(controller)
 sim.run()
 sim.animate()
 sim.plot()
+
